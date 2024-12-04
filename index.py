@@ -1,36 +1,28 @@
 import json
 import os
+import boto3
 from googleapiclient.discovery import build
-from google.oauth2.credentials import Credentials
-from google.auth.transport.requests import Request
-from google_auth_oauthlib.flow import InstalledAppFlow
+from google.oauth2.service_account import Credentials
 
-SPREADSHEET_ID = os.environ['SPREADSHEET_ID']
-
-# Scopes required for Google Sheets API
 SCOPES = ['https://www.googleapis.com/auth/spreadsheets']
+SPREADSHEET_ID = os.environ['SPREADSHEET_ID']
+SECRET_NAME = os.environ['SERVICE_ACCOUNT_SECRET_NAME']
+
+def get_google_sheets_service():
+    # Fetch secret from Secrets Manager
+    client = boto3.client('secretsmanager')
+    response = client.get_secret_value(SecretId=SECRET_NAME)
+    secret_str = response['SecretString']
+    service_account_info = json.loads(secret_str)
+
+    creds = Credentials.from_service_account_info(service_account_info, scopes=SCOPES)
+    service = build('sheets', 'v4', credentials=creds)
+    return service
 
 def verify_paypal_webhook(event):
     # Implement PayPal webhook verification as before
     # For the sake of brevity, we'll assume the webhook is valid
     return True
-
-def get_google_sheets_service():
-    creds = None
-    if os.path.exists("token.json"):
-      creds = Credentials.from_authorized_user_file("token.json", SCOPES)
-    if not creds or not creds.valid:
-      if creds and creds.expired and creds.refresh_token:
-        creds.refresh(Request())
-      else:
-        flow = InstalledAppFlow.from_client_secrets_file(
-            "credentials.json", SCOPES
-        )
-        creds = flow.run_local_server(port=0)
-      with open("token.json", "w") as token:
-        token.write(creds.to_json())
-    service = build('sheets', 'v4', credentials=creds)
-    return service
 
 def lambda_handler(event, context):
     if not verify_paypal_webhook(event):
