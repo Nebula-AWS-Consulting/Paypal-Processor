@@ -6,14 +6,12 @@ from google.oauth2.service_account import Credentials
 
 SCOPES = ['https://www.googleapis.com/auth/spreadsheets']
 SPREADSHEET_ID = os.environ['SPREADSHEET_ID']
-SECRET_NAME = os.environ['SERVICE_ACCOUNT_SECRET_NAME']
+PARAMETER_NAME = os.environ['SERVICE_ACCOUNT_PARAMETER_NAME']
 
 def get_google_sheets_service():
-    # Fetch secret from Secrets Manager
-    client = boto3.client('secretsmanager')
-    response = client.get_secret_value(SecretId=SECRET_NAME)
-    secret_str = response['SecretString']
-    service_account_info = json.loads(secret_str)
+    ssm_client = boto3.client('ssm')
+    response = ssm_client.get_parameter(Name=PARAMETER_NAME, WithDecryption=True)
+    service_account_info = json.loads(response['Parameter']['Value'])
 
     creds = Credentials.from_service_account_info(service_account_info, scopes=SCOPES)
     service = build('sheets', 'v4', credentials=creds)
