@@ -5,8 +5,8 @@ from googleapiclient.discovery import build
 from google.oauth2.service_account import Credentials
 
 SCOPES = ['https://www.googleapis.com/auth/spreadsheets']
-SPREADSHEET_ID = os.environ.get('SPREADSHEET_ID', 'default_spreadsheet_id')
-PARAMETER_NAME = os.environ.get('SERVICE_ACCOUNT_PARAMETER_NAME', 'default_parameter_name')
+SPREADSHEET_ID = os.environ.get('SPREADSHEET_ID')
+PARAMETER_NAME = os.environ.get('SERVICE_ACCOUNT_PARAMETER_NAME')
 
 def get_google_sheets_service():
     try:
