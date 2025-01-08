@@ -41,16 +41,16 @@ def process_subscription_created(resource):
 
     parts = {}
     for segment in custom_id.split('|'):
-        subparts = segment.split(':')
+        subparts = segment.split(':', 1)
         if len(subparts) == 2:
             key, value = subparts
             parts[key] = value
         else:
             print(f"Skipping invalid segment: '{segment}' - expected format key:value")
 
-        purpose = parts.get('purpose', 'Unknown_Purpose')
-        user_email = parts.get('email', 'Unknown_Email')
-        user_name = parts.get('user_name', 'Unknown_Name')
+    purpose = parts.get('purpose', 'Unknown_Purpose')
+    user_email = parts.get('email', 'Unknown_Email')
+    user_name = parts.get('user_name', 'Unknown_Name')
 
     subscriber_info = {
         'user_name': user_name,
@@ -75,16 +75,16 @@ def process_subscription_payment(resource):
 
     parts = {}
     for segment in custom_id.split('|'):
-        subparts = segment.split(':')
+        subparts = segment.split(':', 1)
         if len(subparts) == 2:
             key, value = subparts
             parts[key] = value
         else:
             print(f"Skipping invalid segment: '{segment}' - expected format key:value")
 
-        purpose = parts.get('purpose', 'Unknown_Purpose')
-        user_email = parts.get('email', 'Unknown_Email')
-        user_name = parts.get('user_name', 'Unknown_Name')
+    purpose = parts.get('purpose', 'Unknown_Purpose')
+    user_email = parts.get('email', 'Unknown_Email')
+    user_name = parts.get('user_name', 'Unknown_Name')
 
     payment_info = {
         'purpose': purpose,
@@ -123,11 +123,11 @@ def process_order_approved(resource):
         payment_fee = seller_breakdown.get('paypal_fee', {}).get('value', '0.00')
         net_amount = seller_breakdown.get('net_amount', {}).get('value', '0.00')
 
-        custom_id = purchase_unit.get("custom_id")
+        custom_id = purchase_unit.get("custom_id", "")
 
         parts = {}
         for segment in custom_id.split('|'):
-            subparts = segment.split(':')
+            subparts = segment.split(':', 1)
             if len(subparts) == 2:
                 key, value = subparts
                 parts[key] = value
