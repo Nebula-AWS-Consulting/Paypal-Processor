@@ -1,5 +1,11 @@
 import json
 import boto3
+import os
+from dotenv import load_dotenv
+
+load_dotenv()
+
+table_name = os.getenv('TABLE_NAME')
 
 def validate_event_body(body):
     required_fields = ['event_type', 'resource']
@@ -19,7 +25,7 @@ def save_record(billing_agreement_id, data_type, record_data):
     :param record_data: The data to save
     """
     dynamodb = boto3.resource('dynamodb')
-    table = dynamodb.Table('SubscriptionsAndPayments')
+    table = dynamodb.Table(table_name)
     
     item = {
         'id': billing_agreement_id,
