@@ -1,54 +1,11 @@
 import json
-import os
 import boto3
-from googleapiclient.discovery import build
-from google.oauth2.service_account import Credentials
+import os
+from dotenv import load_dotenv
 
-SCOPES = ['https://www.googleapis.com/auth/spreadsheets']
-SPREADSHEET_ID = os.environ.get('SPREADSHEET_ID', 'default_spreadsheet_id')
-PARAMETER_NAME = os.environ.get('SERVICE_ACCOUNT_PARAMETER_NAME', 'default_parameter_name')
+load_dotenv()
 
-cached_google_sheets_service = None
-
-def get_google_sheets_service():
-    global cached_google_sheets_service
-    if cached_google_sheets_service is not None:
-        return cached_google_sheets_service
-
-    try:
-        ssm_client = boto3.client('ssm')
-        response = ssm_client.get_parameter(Name=PARAMETER_NAME, WithDecryption=True)
-        service_account_info = json.loads(response['Parameter']['Value'])
-
-        creds = Credentials.from_service_account_info(service_account_info, scopes=SCOPES)
-        cached_google_sheets_service = build('sheets', 'v4', credentials=creds)
-        return cached_google_sheets_service
-    except boto3.exceptions.Boto3Error as e:
-        print(f"SSM error: {e}")
-        raise RuntimeError("Failed to fetch service account credentials from SSM.") from e
-    except Exception as e:
-        print(f"Error initializing Google Sheets service: {e}")
-        raise RuntimeError("Failed to initialize Google Sheets service.") from e
-
-def append_to_google_sheet(data):
-    try:
-        service = get_google_sheets_service()
-        value_range_body = {
-            'values': [data]
-        }
-        request = service.spreadsheets().values().append(
-            spreadsheetId=SPREADSHEET_ID,
-            range=f"A:E",
-            valueInputOption='RAW',
-            body=value_range_body
-        )
-        request.execute()
-    except ValueError as e:
-        print(f"ValueError while appending data: {e}")
-        raise RuntimeError("Invalid data provided for appending to Google Sheets.") from e
-    except Exception as e:
-        print(f"Error appending data to Google Sheets: {e}")
-        raise RuntimeError("Failed to append data to Google Sheets.") from e
+table_name = os.getenv('TABLE_NAME')
 
 def validate_event_body(body):
     required_fields = ['event_type', 'resource']
@@ -68,10 +25,10 @@ def save_record(billing_agreement_id, data_type, record_data):
     :param record_data: The data to save
     """
     dynamodb = boto3.resource('dynamodb')
-    table = dynamodb.Table('SubscriptionsAndPayments')
+    table = dynamodb.Table(table_name)
     
     item = {
-        'billing_agreement_id': billing_agreement_id,
+        'id': billing_agreement_id,
         'data_type': data_type,
         **record_data
     }
@@ -82,26 +39,30 @@ def process_subscription_created(resource):
     """
     :param resource: Subscription resource data from PayPal
     """
-    subscription_id = resource.get('id')
     billing_agreement_id = resource.get('id')
-    custom_id = resource.get('custom_id', '')
 
-    # Extract last payment details
-    billing_info = resource.get('billing_info', {})
-    last_payment = billing_info.get('last_payment', {})
-    amount = last_payment.get('amount', {}).get('value', '0.00')
-    currency = last_payment.get('amount', {}).get('currency_code', 'USD')
+    subscription_create_time = resource.get('create_time')
 
-    user_id, user_email = None, None
-    if '|' in custom_id:
-        parts = dict(part.split(':') for part in custom_id.split('|') if ':' in part)
-        user_id = parts.get('user_id')
-        user_email = parts.get('email')
+    custom_id = resource.get("custom_id", "")
+
+    parts = {}
+    for segment in custom_id.split('|'):
+        subparts = segment.split(':', 1)
+        if len(subparts) == 2:
+            key, value = subparts
+            parts[key] = value
+        else:
+            print(f"Skipping invalid segment: '{segment}' - expected format key:value")
+
+    purpose = parts.get('purpose', 'Unknown_Purpose')
+    user_email = parts.get('email', 'Unknown_Email')
+    user_name = parts.get('user_name', 'Unknown_Name')
 
     subscriber_info = {
-        'subscription_id': subscription_id,
-        'user_id': user_id,
-        'user_email': user_email
+        'user_name': user_name,
+        'purpose': purpose,
+        'user_email': user_email,
+        'create_time': subscription_create_time
     }
 
     save_record(billing_agreement_id, 'subscription', subscriber_info)
@@ -110,48 +71,97 @@ def process_subscription_payment(resource):
     """
     :param resource: Payment resource data from PayPal
     """
-    transaction_id = resource.get('id')
     billing_agreement_id = resource.get('billing_agreement_id')
-    payment_time = resource.get('create_time')
     amount_value = resource['amount']['total']
     amount_currency = resource['amount']['currency']
     transaction_fee = resource.get('transaction_fee', {}).get('value', '0.00')
-    transaction_fee_currency = resource.get('transaction_fee', {}).get('currency_code', 'USD')
+    net_amount = float(amount_value) - float(transaction_fee)
+
+    custom_id = resource.get("custom", "")
+
+    parts = {}
+    for segment in custom_id.split('|'):
+        subparts = segment.split(':', 1)
+        if len(subparts) == 2:
+            key, value = subparts
+            parts[key] = value
+        else:
+            print(f"Skipping invalid segment: '{segment}' - expected format key:value")
+
+    purpose = parts.get('purpose', 'Unknown_Purpose')
+    user_email = parts.get('email', 'Unknown_Email')
+    user_name = parts.get('user_name', 'Unknown_Name')
 
     payment_info = {
-        'transaction_id': transaction_id,
-        'payment_time': payment_time,
+        'purpose': purpose,
+        'user_name': user_name,
+        'user_email': user_email,
         'amount_value': amount_value,
         'amount_currency': amount_currency,
         'transaction_fee': transaction_fee,
-        'transaction_fee_currency': transaction_fee_currency
+        'net_amount': str(net_amount),
+        'create_time': resource.get('create_time', 'Unknown_Time')
     }
 
     save_record(billing_agreement_id, 'payment', payment_info)
 
 def process_order_approved(resource):
-    purchase_unit = resource['purchase_units'][0]
-    amount_value = purchase_unit['amount']['value']
-    amount_currency = purchase_unit['amount']['currency_code']
+    try:
+        id = resource.get('id', 'Unknown_ID')
+        purchase_units = resource.get('purchase_units', [])
+        if not purchase_units:
+            raise ValueError("Missing purchase_units in resource.")
 
-    payer_email = resource['payer']['email_address']
-    payer_given_name = resource['payer']['name']['given_name']
-    payer_surname = resource['payer']['name']['surname']
-    payer_name = f"{payer_given_name} {payer_surname}".strip()
+        purchase_unit = purchase_units[0]
+        amount = purchase_unit.get('amount', {})
+        amount_value = amount.get('value', '0.00')
+        amount_currency = amount.get('currency_code', 'USD')
 
-    purpose = purchase_unit.get('custom_id', 'Unknown')
+        payer = resource.get('payer', {})
+        payer_email = payer.get('email_address', 'Unknown_Email')
+        name_dict = payer.get('name', {})
+        payer_name = (name_dict.get('given_name', 'Unknown_Name') + ' ' + name_dict.get('surname', 'Unknown_Surname'))
+        
+        captures = purchase_unit.get('payments', {}).get('captures', [])
+        first_capture = captures[0] if captures else {}
 
-    payment_info = [
-        "order",
-        resource['id'],  
-        purpose,
-        payer_name,
-        payer_email,
-        amount_value, 
-        amount_currency, 
-        resource['create_time'], 
-    ]
-    append_to_google_sheet(payment_info)
+        seller_breakdown = first_capture.get('seller_receivable_breakdown', {})
+        payment_fee = seller_breakdown.get('paypal_fee', {}).get('value', '0.00')
+        net_amount = seller_breakdown.get('net_amount', {}).get('value', '0.00')
+
+        custom_id = purchase_unit.get("custom_id", "")
+
+        parts = {}
+        for segment in custom_id.split('|'):
+            subparts = segment.split(':', 1)
+            if len(subparts) == 2:
+                key, value = subparts
+                parts[key] = value
+            else:
+                print(f"Skipping invalid segment: '{segment}' - expected format key:value")
+
+        purpose = parts.get('purpose', 'Unknown_Purpose')
+        user_email = parts.get('email', 'Unknown_Email')
+        user_name = parts.get('user_name', 'Unknown_Name')
+
+        payment_info_db = {
+            'purpose': purpose,
+            'user_name': user_name,
+            'payer_name': payer_name,
+            'user_email': user_email,
+            'payer_email': payer_email,
+            'amount_value': amount_value,
+            'amount_currency': amount_currency,
+            'transaction_fee': payment_fee,
+            'net_amount': net_amount,
+            'create_time': resource.get('create_time', 'Unknown_Time')
+        }
+
+        save_record(id, 'payment', payment_info_db)
+
+    except Exception as e:
+        print(f"Error processing order approved: {e}")
+        raise
 
 def lambda_handler(event, context):
     try:
@@ -168,10 +178,8 @@ def lambda_handler(event, context):
 
         if event_type == 'BILLING.SUBSCRIPTION.CREATED':
             process_subscription_created(resource)
-            print(resource)
         elif event_type == 'PAYMENT.SALE.COMPLETED':
             process_subscription_payment(resource)
-            print(resource)
         elif event_type == 'CHECKOUT.ORDER.APPROVED':
             process_order_approved(resource)
         else:
